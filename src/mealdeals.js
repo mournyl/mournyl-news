@@ -1,13 +1,13 @@
 // Meal Deals: real, structured restaurant offers.
 //
-// Once a day at 5 AM Eastern (cron in wrangler.jsonc), and on first load if nothing is stored yet:
-//   1. collect recent deal articles from the feeds below
-//   2. read each FULL article and have Workers AI extract ONLY what the article states:
-//      brand, exact offer, conditions, start/end dates. Anything that isn't a concrete,
-//      redeemable offer is thrown out
-//   3. check the extraction against the article text (brand + any price/percent must appear in it)
-//   4. keep offers that are running now or start within 14 days; expired ones drop off automatically
-// Results live in KV (binding DEALS) so each article is only processed once.
+// How it works (designed so no run can ever lose its work):
+//   COLLECT  once a day (5 AM cron, or whenever the queue is empty and stale): read the deal feeds,
+//            keep fresh deal-looking articles we haven't read yet, store them as a queue in KV.
+//   PROCESS  each run takes articles off the queue ONE AT A TIME: reads the full article, has Workers AI
+//            pull out only what it states (brand, exact offer, conditions, start/end dates), checks that
+//            against the article text, and SAVES immediately before moving to the next one.
+//   Runs happen: 5 AM cron (up to ~12 min), /api/deals/run (~50 s), and page loads while the queue
+//   isn't empty (one article in the background). Expired deals drop off automatically.
 
 import { getFeed, bing, decode, UA } from "./feeds.js";
 
@@ -26,33 +26,41 @@ const SOURCES = [
 ];
 const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const FALLBACK_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const AI_TIMEOUT_MS = 45000;
 const MAX_ARTICLE_AGE_DAYS = 21;   // only read articles this new
 const UPCOMING_DAYS = 14;          // show offers that start within this window
-const NEW_PER_RUN = 30;            // articles read per daily run (~6,000 AI neurons incl. big roundups; free allowance is 10,000/day)
+const QUEUE_MAX = 30;              // articles read per day (~6,000 AI neurons; free allowance is 10,000/day)
 const SHOW = 24;                   // page shows 8, "Show all" reveals the rest
 const TZ = "America/New_York";
 const DAY = 864e5;
 
 const todayStr = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
 const addDays = (s, n) => todayStr(new Date(Date.parse(s + "T12:00:00Z") + n * DAY));
+const getJSON = (env, k) => env.DEALS.get(k, "json");
+const putJSON = (env, k, v, opts) => env.DEALS.put(k, JSON.stringify(v), opts);
 
 // ---------------------------------------------------------------- read side (used by /api/news)
 export async function getMealDeals(env, ctx) {
   if (!env || !env.DEALS) return { offers: [], complete: true };
-  const stored = await env.DEALS.get("mealdeals", "json");
-  const stale = !stored || Date.now() - Date.parse(stored.built) > 30 * 36e5;
-  // first run, missed 5 AM run, or a run that hasn't finished yet → keep working in the background
-  if (env.AI && (stale || !stored.complete)) ctx.waitUntil(buildMealDeals(env, { budgetMs: 25000 }).catch(() => {}));
-  return { offers: live(stored ? stored.offers : []).slice(0, SHOW), complete: !!(stored && stored.complete) };
+  const [stored, state] = await Promise.all([getJSON(env, "mealdeals"), getJSON(env, "mealdeals:state")]);
+  const pending = !state || state.queue.length > 0 || Date.now() - Date.parse(state.collected) > 30 * 36e5;
+  // queue not finished (or never started / missed 5 AM) → read one more article in the background
+  if (env.AI && pending) ctx.waitUntil(step(env, { budgetMs: 1, parallel: 1, source: "page" }).catch(() => {}));
+  return { offers: live(stored ? stored.offers : []).slice(0, SHOW), complete: !pending };
 }
 
-// GET /api/deals/status: what the scanner has done (for checking it's working)
+// GET /api/deals/status
 export async function dealsStatus(env) {
   if (!env.DEALS) return { error: "DEALS KV binding missing" };
   if (!env.AI) return { error: "AI binding missing" };
-  const stored = await env.DEALS.get("mealdeals", "json");
-  const st = (await env.DEALS.get("mealdeals:status", "json")) || {};
-  return { built: stored && stored.built, complete: !!(stored && stored.complete), offers_stored: stored ? stored.offers.length : 0, offers_live: stored ? live(stored.offers).length : 0, ...st };
+  const [stored, state, st] = await Promise.all([getJSON(env, "mealdeals"), getJSON(env, "mealdeals:state"), getJSON(env, "mealdeals:status")]);
+  return {
+    offers_live: stored ? live(stored.offers).length : 0,
+    queue_left: state ? state.queue.length : null,
+    articles_read_total: state ? state.done.length : 0,
+    collected: state ? state.collected : null,
+    ...(st || {}),
+  };
 }
 
 // re-check dates at read time so a deal disappears the moment it ends
@@ -66,71 +74,115 @@ function live(offers) {
       || (b.ts || 0) - (a.ts || 0));
 }
 
-// ---------------------------------------------------------------- build side (cron)
-export async function buildMealDeals(env, { budgetMs = 10 * 60000 } = {}) {
+// ---------------------------------------------------------------- build side
+// cron at 5 AM: fresh collect + process for up to ~12 minutes
+export async function buildMealDeals(env, { budgetMs = 12 * 60000, force = true } = {}) {
+  return step(env, { budgetMs, parallel: 3, force, source: "cron" });
+}
+
+// one pass: (collect if needed) then process articles until the time budget is used.
+// budgetMs = how long it may keep STARTING new articles; an article that has started always finishes and saves.
+export async function step(env, { budgetMs = 50000, parallel = 3, force = false, source = "run" } = {}) {
   if (!env.DEALS || !env.AI) return;
-  if (await env.DEALS.get("mealdeals:lock")) { await env.DEALS.put("mealdeals:status", JSON.stringify({ ...((await env.DEALS.get("mealdeals:status", "json")) || {}), note: "a scan is already running; try again in a minute" })); return; }
-  await env.DEALS.put("mealdeals:lock", "1", { expirationTtl: 60 });
-  const started = Date.now();
-  const status = { last_run: new Date().toISOString(), candidates: 0, read_this_run: 0, new_offers_this_run: 0, fetch_failed: 0, ai_errors: 0, last_error: null };
+  const t0 = Date.now();
+  let state = await getJSON(env, "mealdeals:state");
 
-  try {
-    const now = Date.now();
-    const res = await Promise.allSettled(SOURCES.map(([n, u]) => getFeed(n, u)));
-    status.feeds_ok = res.filter(r => r.status === "fulfilled" && r.value.length).length + "/" + SOURCES.length;
-    const seen = new Set();
-    const candidates = res.flatMap(r => (r.status === "fulfilled" ? r.value : []))
-      .filter(i => i.ts && now - i.ts < MAX_ARTICLE_AGE_DAYS * DAY && !/news\.google\.com/.test(i.link))
-      .filter(i => /deal|free|bogo|buy one|\$\d|% off|offer|discount|promo|coupon|for \$|half|national .* day|returns|value|happy hour/i.test(i.title))
-      .filter(i => !/\b(stock|shares|earnings|lawsuit|recall|layoffs?|bankrupt|ceo|analyst|investors?|take-private|takeover|acquisition)\b/i.test(i.title))
-      .filter(i => { const k = i.link.split("?")[0]; if (seen.has(k)) return false; seen.add(k); return true; })
-      .sort((a, b) => b.ts - a.ts);
-    status.candidates = candidates.length;
+  const needCollect = force || !state || (state.queue.length === 0 && Date.now() - Date.parse(state.collected) > 20 * 36e5);
+  if (needCollect) {
+    // only one collector at a time
+    if (await env.DEALS.get("mealdeals:collecting")) return;
+    await env.DEALS.put("mealdeals:collecting", "1", { expirationTtl: 60 });
+    await status(env, { stage: "collecting feeds", source });
+    state = await collect(env, state);
+    await env.DEALS.delete("mealdeals:collecting");
+  }
 
-    const prev = (await env.DEALS.get("mealdeals", "json")) || { offers: [] };
-    let offers = [...prev.offers];
-
-    // split into already-read (cached) and still-to-read
-    const keyed = await Promise.all(candidates.map(async item => ({ item, key: "x2:" + (await sha1(item.link.split("?")[0])) })));
-    const todo = [];
-    for (const k of keyed) {
-      const cached = await env.DEALS.get(k.key, "json");
-      if (cached) addOffers(offers, cached, k.item); else todo.push(k);
+  let started = 0;
+  const worker = async () => {
+    while (true) {
+      if (started > 0 && Date.now() - t0 > budgetMs) return;
+      // claim the next article: take it off the (shared, in-memory) queue and save before working on it
+      const item = state.queue.shift();
+      if (!item) return;
+      started++;
+      await putJSON(env, "mealdeals:state", state);
+      await status(env, { stage: `reading: ${item.title.slice(0, 80)}`, source, queue_left: state.queue.length });
+      await processOne(env, item, state);
     }
-    const queue = todo.slice(0, NEW_PER_RUN);
+  };
+  await Promise.all(Array.from({ length: parallel }, worker));
 
-    const save = async (complete) => {
-      offers = dedupeOffers(offers);
-      await env.DEALS.put("mealdeals", JSON.stringify({ built: new Date().toISOString(), complete, offers: live(offers).slice(0, 60) }));
-      await env.DEALS.put("mealdeals:status", JSON.stringify({ ...status, pending: Math.max(0, todo.length - status.read_this_run), elapsed_ms: Date.now() - started }));
-    };
-
-    // read articles 5 at a time, saving after every batch so progress is never lost
-    for (let i = 0; i < queue.length; i += 5) {
-      if (Date.now() - started > budgetMs) break;
-      await env.DEALS.put("mealdeals:lock", "1", { expirationTtl: 60 });
-      await Promise.all(queue.slice(i, i + 5).map(async ({ item, key }) => {
-        status.read_this_run++;
-        let result;
-        try { result = await extract(env, item, status); }
-        catch (e) { status.ai_errors++; status.last_error = String(e).slice(0, 200); return; } // not cached → retried next run
-        if (result === null) { status.fetch_failed++; await env.DEALS.put(key, JSON.stringify({ is_offer: false, failed: true }), { expirationTtl: 86400 }); return; }
-        await env.DEALS.put(key, JSON.stringify(result), { expirationTtl: 40 * 86400 });
-        const before = offers.length; addOffers(offers, result, item); status.new_offers_this_run += offers.length - before;
-      }));
-      await save(false);
-    }
-    await save(status.read_this_run >= todo.length);
-  } catch (e) {
-    status.last_error = String(e).slice(0, 200);
-    await env.DEALS.put("mealdeals:status", JSON.stringify(status));
-  } finally {
-    await env.DEALS.delete("mealdeals:lock");
+  if (state.queue.length === 0) {
+    // queue finished → rebuild the list from every stored result (fixes anything a parallel run overwrote)
+    await rebuildOffers(env, state);
+    await status(env, { stage: "done", source, finished: new Date().toISOString() });
+  } else {
+    await status(env, { stage: "paused (more articles queued)", source });
   }
 }
 
+async function collect(env, prev) {
+  const now = Date.now();
+  const res = await Promise.allSettled(SOURCES.map(([n, u]) => getFeed(n, u)));
+  const doneKeys = new Set((prev ? prev.done : []).filter(d => now - d.at < 40 * DAY).map(d => d.key));
+  const seen = new Set();
+  const fresh = res.flatMap(r => (r.status === "fulfilled" ? r.value : []))
+    .filter(i => i.ts && now - i.ts < MAX_ARTICLE_AGE_DAYS * DAY && !/news\.google\.com/.test(i.link))
+    .filter(i => /deal|free|bogo|buy one|\$\d|% off|offer|discount|promo|coupon|for \$|half|national .* day|returns|value|happy hour/i.test(i.title))
+    .filter(i => !/\b(stock|shares|earnings|lawsuit|recall|layoffs?|bankrupt|ceo|analyst|investors?|take-private|takeover|acquisition)\b/i.test(i.title))
+    .filter(i => { const k = i.link.split("?")[0]; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => b.ts - a.ts);
+  const queue = [];
+  for (const i of fresh) {
+    const key = "x3:" + (await sha1(i.link.split("?")[0]));
+    if (doneKeys.has(key)) continue;
+    queue.push({ key, title: i.title, link: i.link, source: i.source, ts: i.ts, date: i.date, image: i.image });
+    if (queue.length >= QUEUE_MAX) break;
+  }
+  const state = { collected: new Date().toISOString(), queue, done: (prev ? prev.done : []).filter(d => now - d.at < 40 * DAY) };
+  await putJSON(env, "mealdeals:state", state);
+  await status(env, { stage: "collected", feeds_ok: res.filter(r => r.status === "fulfilled" && r.value.length).length + "/" + SOURCES.length, queued: queue.length });
+  return state;
+}
+
+async function processOne(env, item, state) {
+  let result;
+  try {
+    result = await extract(env, item);
+    if (result === null) result = { is_offer: false, failed: "could not read article" };
+  } catch (e) {
+    result = { is_offer: false, failed: "AI: " + String(e).slice(0, 160) };
+  }
+  await putJSON(env, item.key, { ...result, item }, { expirationTtl: 40 * 86400 });
+  // record it as done, and merge its offers into the live list right away
+  state.done = (state.done || []).filter(d => d.key !== item.key).concat({ key: item.key, at: Date.now(), offers: result.is_offer ? result.offers.length : 0, failed: result.failed || null });
+  await putJSON(env, "mealdeals:state", state);
+  if (result.is_offer) {
+    const stored = (await getJSON(env, "mealdeals")) || { offers: [] };
+    const offers = [...stored.offers]; addOffers(offers, result, item);
+    await putJSON(env, "mealdeals", { built: new Date().toISOString(), offers: live(dedupeOffers(offers)).slice(0, 60) });
+  }
+  const st = (await getJSON(env, "mealdeals:status")) || {};
+  await status(env, { articles_with_offers: (st.articles_with_offers || 0) + (result.is_offer ? 1 : 0), errors: (st.errors || 0) + (result.failed ? 1 : 0), last_error: result.failed || st.last_error || null });
+}
+
+async function rebuildOffers(env, state) {
+  const offers = [];
+  const keys = (state.done || []).filter(d => d.offers > 0).map(d => d.key);
+  for (let i = 0; i < keys.length; i += 20) {
+    const rows = await Promise.all(keys.slice(i, i + 20).map(k => getJSON(env, k)));
+    for (const r of rows) if (r && r.is_offer) addOffers(offers, r, r.item);
+  }
+  await putJSON(env, "mealdeals", { built: new Date().toISOString(), offers: live(dedupeOffers(offers)).slice(0, 60) });
+}
+
+async function status(env, patch) {
+  const st = (await getJSON(env, "mealdeals:status")) || {};
+  await putJSON(env, "mealdeals:status", { ...st, ...patch, updated: new Date().toISOString() });
+}
+
 function addOffers(list, result, item) {
-  if (!result || !result.is_offer) return;
+  if (!result || !result.is_offer || !item) return;
   for (const o of [].concat(result.offers || [])) list.push({ ...o, link: item.link, source: item.source, ts: item.ts, image: o.image || result.image || item.image || null });
 }
 // same brand + same headline offer → keep the newest article
@@ -167,7 +219,7 @@ const SCHEMA = {
   required: ["is_offer", "offers"],
 };
 
-async function extract(env, item, status = {}) {
+async function extract(env, item) {
   const page = await getArticle(item.link);
   if (!page || page.text.length < 200) return null;
   const today = todayStr();
@@ -194,9 +246,9 @@ Respond with JSON only.` },
   const attempts = [[MODEL, true], [MODEL, false], [FALLBACK_MODEL, false]];   // with JSON schema, then plain JSON, then smaller model
   for (const [model, schema] of attempts) {
     try {
-      const opts = { messages, max_tokens: 1800, temperature: 0 };
+      const opts = { messages, max_tokens: 1400, temperature: 0 };
       if (schema) opts.response_format = { type: "json_schema", json_schema: SCHEMA };
-      const r = await env.AI.run(model, opts);
+      const r = await Promise.race([env.AI.run(model, opts), new Promise((_, rej) => setTimeout(() => rej(new Error("AI timed out")), AI_TIMEOUT_MS))]);
       const raw = r && (r.response ?? r.result?.response ?? r);
       out = typeof raw === "string" ? JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)) : raw;
       if (out && typeof out === "object" && "is_offer" in out) break;

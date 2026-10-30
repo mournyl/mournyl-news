@@ -5,16 +5,18 @@
 // everything else → static site in /public
 import { handleNews } from "./news.js";
 import { handleSports } from "./sports.js";
-import { buildMealDeals, dealsStatus } from "./mealdeals.js";
+import { buildMealDeals, step, dealsStatus } from "./mealdeals.js";
 
 const json = (o) => new Response(JSON.stringify(o, null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const ROUTES = {
   "/api/news": handleNews,
   "/api/sports": handleSports,
   "/api/deals/status": async (req, ctx, env) => json(await dealsStatus(env)),
-  // runs one scan pass right now (about 25 s), then shows the status; safe to hit repeatedly
+  // reads queued articles for ~40 s (3 at a time), saving after each one, then shows the status.
+  // add ?fresh=1 to re-collect the feeds first. Safe to hit repeatedly.
   "/api/deals/run": async (req, ctx, env) => {
-    await buildMealDeals(env, { budgetMs: 25000 });
+    const fresh = new URL(req.url).searchParams.has("fresh");
+    await step(env, { budgetMs: 40000, parallel: 3, force: fresh, source: "run" });
     return json(await dealsStatus(env));
   },
 };
