@@ -53,7 +53,7 @@ const CACHE_SECONDS = 900;
 
 export async function handleNews(request, ctx, env) {
   const cache = caches.default;
-  const key = new Request(new URL("/api/news?v=4", request.url).toString());
+  const key = new Request(new URL("/api/news?v=5", request.url).toString());
   const hit = await cache.match(key);
   if (hit) return hit;
 

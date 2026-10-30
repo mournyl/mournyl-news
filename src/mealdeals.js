@@ -69,7 +69,7 @@ function live(offers) {
 // ---------------------------------------------------------------- build side (cron)
 export async function buildMealDeals(env, { budgetMs = 10 * 60000 } = {}) {
   if (!env.DEALS || !env.AI) return;
-  if (await env.DEALS.get("mealdeals:lock")) return;
+  if (await env.DEALS.get("mealdeals:lock")) { await env.DEALS.put("mealdeals:status", JSON.stringify({ ...((await env.DEALS.get("mealdeals:status", "json")) || {}), note: "a scan is already running; try again in a minute" })); return; }
   await env.DEALS.put("mealdeals:lock", "1", { expirationTtl: 60 });
   const started = Date.now();
   const status = { last_run: new Date().toISOString(), candidates: 0, read_this_run: 0, new_offers_this_run: 0, fetch_failed: 0, ai_errors: 0, last_error: null };

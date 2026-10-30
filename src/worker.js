@@ -12,6 +12,11 @@ const ROUTES = {
   "/api/news": handleNews,
   "/api/sports": handleSports,
   "/api/deals/status": async (req, ctx, env) => json(await dealsStatus(env)),
+  // runs one scan pass right now (about 25 s), then shows the status; safe to hit repeatedly
+  "/api/deals/run": async (req, ctx, env) => {
+    await buildMealDeals(env, { budgetMs: 25000 });
+    return json(await dealsStatus(env));
+  },
 };
 
 export default {
