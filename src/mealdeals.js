@@ -9,7 +9,7 @@
 //   4. keep offers that are running now or start within 14 days; expired ones drop off automatically
 // Results live in KV (binding DEALS) so each article is only processed once.
 
-import { getFeed, bing, decode, UA } from "./news.js";
+import { getFeed, bing, decode, UA } from "./feeds.js";
 
 const SOURCES = [
   ["Fast Food Post", "https://www.fastfoodpost.com/feed/"],
