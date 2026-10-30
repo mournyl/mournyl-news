@@ -17,9 +17,8 @@
   <div class="wrap">
     <div class="util">
       <b id="today"></b>
-      <span id="loc"></span>
-      <span id="countdown" class="hide-sm"></span>
-      <div class="ticker mono" id="ticker">
+      <span id="updated" class="hide-sm"></span>
+      <div class="ticker mono">
         <span>BTC <b data-coin="bitcoin">—</b> <i data-chg="bitcoin"></i></span>
         <span>ETH <b data-coin="ethereum">—</b> <i data-chg="ethereum"></i></span>
       </div>
@@ -32,15 +31,13 @@
     </header>
     <div class="rule"></div>
 
-    <main id="app"></main>
+    <main id="app"><div class="loading mono">Loading today's news…</div></main>
 
     <footer class="foot mono">
       <span>MOURNYL NEWS · <span id="year"></span></span>
-      <span>Deals are placeholders</span>
+      <span id="sources"></span>
     </footer>
   </div>
-
-  <script src="content.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
