@@ -15,7 +15,7 @@
   // Stores the extracted meal deals. Wrangler creates this automatically on deploy.
   // If your wrangler can't, run:  npx wrangler kv namespace create DEALS  and paste the id below.
   "kv_namespaces": [
-    { "binding": "DEALS", "id": "6979cc0cca064c5e9b69db60f54e4886" }
+    { "binding": "DEALS" }
   ],
 
   // Refresh meal deals once a day at 5:00 AM Eastern.

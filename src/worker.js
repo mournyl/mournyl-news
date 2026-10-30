@@ -5,9 +5,14 @@
 // everything else → static site in /public
 import { handleNews } from "./news.js";
 import { handleSports } from "./sports.js";
-import { buildMealDeals } from "./mealdeals.js";
+import { buildMealDeals, dealsStatus } from "./mealdeals.js";
 
-const ROUTES = { "/api/news": handleNews, "/api/sports": handleSports };
+const json = (o) => new Response(JSON.stringify(o, null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+const ROUTES = {
+  "/api/news": handleNews,
+  "/api/sports": handleSports,
+  "/api/deals/status": async (req, ctx, env) => json(await dealsStatus(env)),
+};
 
 export default {
   async fetch(request, env, ctx) {

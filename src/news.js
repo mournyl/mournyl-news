@@ -72,7 +72,8 @@ export async function handleNews(request, ctx, env) {
   ]);
   const sections = { big, ...Object.fromEntries(rest) };
   // meal deals = structured offers extracted from full articles (see src/mealdeals.js)
-  sections.meals = await getMealDeals(env, ctx);
+  const md = await getMealDeals(env, ctx);
+  sections.meals = md.offers;
 
   // fill in missing photos from each article's own page (og:image)
   const need = [...sections.big, ...sections.redbull].filter(i => !i.image && !/news\.google\.com/.test(i.link)).slice(0, 18);
@@ -84,7 +85,8 @@ export async function handleNews(request, ctx, env) {
   sections.deals = sections.deals.slice(0, LIMIT.deals);
 
   const body = JSON.stringify({ updated: new Date().toISOString(), sections });
-  const res = new Response(body, { headers: { "content-type": "application/json; charset=utf-8", "cache-control": `public, max-age=${CACHE_SECONDS}` } });
+  const ttl = md.complete ? CACHE_SECONDS : 60;   // while the deal scan is still running, refresh every minute
+  const res = new Response(body, { headers: { "content-type": "application/json; charset=utf-8", "cache-control": `public, max-age=${ttl}` } });
   ctx.waitUntil(cache.put(key, res.clone()));
   return res;
 }
