@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mournyl news</title>
+  <meta name="description" content="mournyl news: the news, minus the noise.">
+  <meta name="theme-color" content="#000000">
+  <link rel="icon" type="image/png" href="img/favicon.png">
+  <link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="util">
+      <b id="today"></b>
+      <span id="updated" class="hide-sm"></span>
+      <div class="ticker mono">
+        <span>BTC <b data-coin="bitcoin">—</b> <i data-chg="bitcoin"></i></span>
+        <span>ETH <b data-coin="ethereum">—</b> <i data-chg="ethereum"></i></span>
+      </div>
+    </div>
+
+    <header class="mast">
+      <div class="side mono" id="mast-left"></div>
+      <h1 class="logo"><img src="img/wordmark.png" alt="mournyl news" width="1382" height="419"></h1>
+      <div class="side right mono" id="mast-right"></div>
+    </header>
+    <div class="rule"></div>
+
+    <main id="app"><div class="loading mono">Loading today's news…</div></main>
+
+    <footer class="foot mono">
+      <span>MOURNYL NEWS · <span id="year"></span></span>
+      <span id="sources"></span>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
