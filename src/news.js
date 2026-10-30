@@ -38,6 +38,17 @@ const FEEDS = {
     ["Slickdeals", "https://slickdeals.net/newsearch.php?mode=frontpage&searcharea=deals&searchin=first&rss=1"],
     ["DealNews", "https://www.dealnews.com/?rss=1"],
   ],
+  meals: [ // fast-food & restaurant deals happening now or soon
+    ["Fast Food Post", "https://www.fastfoodpost.com/feed/"],
+    ["Chew Boom", "https://chewboom.substack.com/feed"],
+    ["Brand Eating", "https://www.brandeating.com/feeds/posts/default"],
+    ["Google News", "https://news.google.com/rss/search?q=fast+food+deal+OR+BOGO+OR+%22free%22+restaurant+when:7d&hl=en-US&gl=US&ceid=US:en"],
+  ],
+  redbull: [ // Red Bull Edition watch: new/limited flavors
+    ["Sporked", "https://sporked.com/tag/red-bull/feed/"],
+    ["The Impulsive Buy", "https://www.theimpulsivebuy.com/wordpress/tag/red-bull/feed/"],
+    ["Google News", "https://news.google.com/rss/search?q=%22Red+Bull%22+edition+flavor+when:60d&hl=en-US&gl=US&ceid=US:en"],
+  ],
   aviation: [
     ["AVweb", "https://avweb.com/feed/"],
     ["Simple Flying", "https://simpleflying.com/feed/"],
@@ -45,13 +56,20 @@ const FEEDS = {
   ],
 };
 
-const LIMIT = { top: 10, world: 8, politics: 6, sports: 8, tech: 8, drops: 8, deals: 12, aviation: 6 };
+const LIMIT = { top: 10, world: 8, politics: 6, sports: 8, tech: 8, drops: 8, deals: 12, meals: 12, redbull: 6, aviation: 6 };
+
+// Keep only items that fit the section.
+const FILTER = {
+  meals: (i) => (/\$\d|\d+% off/i.test(i.title) || /\b(bogo|buy one|free|deals?|discount|offers?|promo|coupon|half[- ]off|value|combo|happy hour|returns?|limited[- ]time)\b/i.test(i.title))
+    && !/\b(stock|shares|earnings|lawsuit|recall|layoffs?)\b/i.test(i.title),
+  redbull: (i) => /red ?bull/i.test(i.title + " " + i.summary) && !/racing|f1|formula|verstappen|grand prix|motogp|salzburg|leipzig|new york red bulls|cliff div/i.test(i.title),
+};
 const CACHE_SECONDS = 900;
 const UA = "Mozilla/5.0 (compatible; mournyl-news/1.0; +https://mournyl.com)";
 
 export async function handleNews(request, ctx) {
   const cache = caches.default;
-  const key = new Request(new URL("/api/news?v=1", request.url).toString());
+  const key = new Request(new URL("/api/news?v=2", request.url).toString());
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -61,6 +79,7 @@ export async function handleNews(request, ctx) {
     const results = await Promise.allSettled(list.map(([name, url]) => getFeed(name, url)));
     let items = results.flatMap(r => (r.status === "fulfilled" ? r.value : []));
     items.forEach(i => sources.add(i.source));
+    if (FILTER[sec]) items = items.filter(FILTER[sec]);
     items = dedupe(items).sort((a, b) => (b.ts || 0) - (a.ts || 0));
     // put stories with photos first within the newest ones, so cards look good
     sections[sec] = interleave(items).slice(0, LIMIT[sec] || 8);
@@ -110,10 +129,16 @@ export function parseFeed(xml, source) {
     const date = tag(b, "pubDate") || tag(b, "published") || tag(b, "updated") || tag(b, "dc:date");
     const ts = Date.parse(clean(date)) || 0;
     const html = tag(b, "content:encoded") || tag(b, "content") || tag(b, "description") || tag(b, "summary") || "";
+    let src = source, t = title;
+    const pub = clean(tag(b, "source"));
+    if (pub && /google news/i.test(source)) {
+      src = pub;
+      t = title.replace(new RegExp("\\s+[-–]\\s+" + pub.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"), "");
+    }
     out.push({
-      title,
+      title: t,
       link: decode(link.trim()),
-      source,
+      source: src,
       ts,
       date: ts ? new Date(ts).toISOString() : null,
       image: findImage(b, html),

@@ -86,6 +86,15 @@ a:hover .pic img { filter: grayscale(1) contrast(1.2) brightness(1); }
 .deal.noimg .big { font-size: 52px; margin-top: 26px; }
 .deal h4 { font-size: 13.5px; line-height: 1.32; font-weight: 600; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
+.deal.meal .pic { background: #0a0a0a; }
+.deal.meal .pic img { object-fit: cover; padding: 0; }
+
+/* ---------- Red Bull Edition Watch ---------- */
+.rbw { border: 1px solid #fff; border-radius: 12px; padding: 16px; position: relative; overflow: hidden; }
+.rbw .rbh { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.rbw .lim { position: absolute; right: -34px; top: 16px; transform: rotate(35deg); background: #fff; color: #000; font-size: 9px; font-weight: 800; letter-spacing: .2em; padding: 4px 40px; }
+.rbw h3 { margin-top: 12px; }
+
 /* ---------- three columns ---------- */
 .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
 .three h3 { font-size: 21px; line-height: 1.15; letter-spacing: -.01em; margin-top: 14px; }

@@ -22,8 +22,10 @@ public/img/          wordmark + favicon
 | Section | Sources |
 |---|---|
 | Top story + Latest | BBC News, NPR, The Guardian |
+| Red Bull Edition Watch | Sporked + The Impulsive Buy Red Bull tags, Google News ("Red Bull" edition flavor, last 60 days; racing/F1 filtered out) |
 | New & limited (drops) | The Impulsive Buy, Sporked, Chew Boom |
-| Deals | Slickdeals front page, DealNews |
+| Meal Deals | Fast Food Post, Chew Boom, Brand Eating, Google News (fast-food deals, last 7 days), keeping only BOGO / free / $ / % off / returns-style headlines |
+| Deals & Steals | Slickdeals front page, DealNews |
 | Tech | The Verge, Ars Technica, TechCrunch |
 | Politics | NPR Politics, The Guardian |
 | Sports | ESPN, BBC Sport, CBS Sports |

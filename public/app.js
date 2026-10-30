@@ -33,6 +33,9 @@
     let m = t.match(/(\d{1,2})\s?% off/i); if (m) return `−${m[1]}%`;
     m = t.match(/\$\d[\d,]*(?:\.\d\d)?/); if (m) return m[0].replace(/\.00$/, "");
     if (/\bfree\b/i.test(t)) return "FREE";
+    if (/half[- ]off/i.test(t)) return "½ OFF";
+    if (/\b(returns?|is back|brings back)\b/i.test(t)) return "BACK";
+    if (/\bnew\b/i.test(t)) return "NEW";
     return "DEAL";
   };
 
@@ -55,8 +58,11 @@
     const newest = [...top].sort((a, b) => (b.date || "").localeCompare(a.date || "")).find(i => !used.has(i.link));
     if (newest) used.add(newest.link);
     const more = take(top, 5);
-    const [drop] = take(S.drops, 1, true);
-    const dropsMore = take(S.drops, 4);
+    const rb = take(S.redbull, 1, true)[0] || take(S.redbull, 1)[0];
+    const rbMore = take(S.redbull, 3);
+    const [drop] = rb ? [] : take(S.drops, 1, true);
+    const dropsMore = take(S.drops, rb ? 3 : 4);
+    const meals = take(S.meals, 8);
     const deals = take(S.deals, 8);
     const col = (arr) => { const [a] = take(arr, 1, true); return [a, ...take(arr, 4)].filter(Boolean); };
     const tech = col(S.tech), pol = col(S.politics), sports = col(S.sports);
@@ -88,12 +94,22 @@
         </div>
         <figure>${pic(lead, 470)}<figcaption class="cap">Photo via ${esc(lead.source)}</figcaption></figure>
         <div class="drop">
+          ${rb ? `<div class="rbw"><div class="rbh"><span class="pill inv">Red Bull Edition Watch</span><span class="lim">LIMITED</span></div>
+            <a href="${safeUrl(rb.link)}" target="_blank" rel="noopener">${pic(rb, 230)}<h3>${esc(rb.title)}</h3></a><div class="when">${meta(rb)}</div>
+            ${rbMore.length ? `<ul class="tl">${rbMore.map(i => `<li><a href="${safeUrl(i.link)}" target="_blank" rel="noopener"><span>${esc(i.title)}</span><em>${meta(i)}</em></a></li>`).join("")}</ul>` : ""}</div>` : ""}
           ${drop ? `<a href="${safeUrl(drop.link)}" target="_blank" rel="noopener">${pic(drop, 250)}<span class="pill" style="margin-top:14px">New &amp; limited</span><h3>${esc(drop.title)}</h3></a><div class="when">${meta(drop)}</div>` : ""}
-          <ul class="tl">${dropsMore.map(i => `<li><a href="${safeUrl(i.link)}" target="_blank" rel="noopener"><span>${esc(i.title)}</span><em>${meta(i)}</em></a></li>`).join("")}</ul>
+          ${dropsMore.length ? `<div class="k" style="margin-top:18px">New &amp; limited</div><ul class="tl">${dropsMore.map(i => `<li><a href="${safeUrl(i.link)}" target="_blank" rel="noopener"><span>${esc(i.title)}</span><em>${meta(i)}</em></a></li>`).join("")}</ul>` : ""}
         </div>
       </section>` : ""}
 
-      ${deals.length ? `<div class="sech"><h5>Deals &amp; Drops</h5><span>Live from the deal boards</span></div>
+      ${meals.length ? `<div class="sech"><h5>Meal Deals</h5><span>Fast food &amp; restaurants · now &amp; coming up</span></div>
+      <section class="deals">${meals.map(d => `
+        <a class="deal meal${d.image ? "" : " noimg"}" href="${safeUrl(d.link)}" target="_blank" rel="noopener">${pic(d)}
+          <div class="db"><div class="top"><span class="k">${esc(d.source)}</span><span class="when">${ago(d.date)}</span></div>
+          <div class="big">${esc(offer(d.title))}</div><h4>${esc(d.title)}</h4></div></a>`).join("")}
+      </section>` : ""}
+
+      ${deals.length ? `<div class="sech"><h5>Deals &amp; Steals</h5><span>Live from the deal boards</span></div>
       <section class="deals">${deals.map(d => `
         <a class="deal${d.image ? "" : " noimg"}" href="${safeUrl(d.link)}" target="_blank" rel="noopener">${pic(d)}
           <div class="db"><div class="top"><span class="k">${esc(d.source)}</span><span class="when">${ago(d.date)}</span></div>
@@ -111,7 +127,7 @@
     const t = upd.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
     $("#updated").textContent = `Updated ${t}`;
     const mu = document.getElementById("mast-upd"); if (mu) mu.textContent = `Updated ${t}`;
-    $("#sources").textContent = data.sources && data.sources.length ? "Headlines via " + data.sources.join(", ") : "";
+    $("#sources").textContent = data.sources && data.sources.length ? "Headlines via " + data.sources.slice(0, 18).join(", ") + (data.sources.length > 18 ? " + more" : "") : "";
   }
 
   async function load() {
