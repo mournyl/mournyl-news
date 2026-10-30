@@ -65,15 +65,30 @@
         </div>
       </section>` : `<div class="loading mono">Couldn't find today's top stories right now.</div>`;
 
-    // ---- meal deals
+    // ---- meal deals (structured offers: brand, exact offer, conditions, dates)
     const meals = S.meals || [];
+    const fmtDay = (s) => new Date(s + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    const todayISO = new Date().toLocaleDateString("en-CA");
+    const runs = (d) => {
+      if (d.start_date && d.start_date === d.end_date) return `${fmtDay(d.start_date)} only`;
+      if (d.status === "soon") return `Starts ${fmtDay(d.start_date)}${d.end_date ? ` – ${fmtDay(d.end_date)}` : ""}`;
+      if (d.end_date === todayISO) return "Ends today";
+      if (d.end_date) return `Through ${fmtDay(d.end_date)}`;
+      return "On now · end date not announced";
+    };
     $("#meals").innerHTML = `
-      <div class="sech"><h5>Meal Deals</h5><span>Fast food &amp; restaurants · last 30 days</span></div>
+      <div class="sech"><h5>Meal Deals</h5><span>Updated daily 5 AM · on now or starting soon</span></div>
       ${meals.length ? `<section class="deals">${meals.map(d => `
-        <a class="deal meal${d.image ? "" : " noimg"}" ${A(d.link)}>${pic(d)}
-          <div class="db"><div class="top"><span class="k">${esc(d.source)}</span><span class="when">${ago(d.date)}</span></div>
-          <div class="big">${esc(offer(d.title))}</div><h4>${esc(d.title)}</h4></div></a>`).join("")}</section>`
-        : `<div class="empty mono">No fresh meal deals found right now. Check back soon.</div>`}`;
+        <a class="deal meal${d.image ? "" : " noimg"}${d.status === "now" ? " hot" : ""}" ${A(d.link)}>${pic(d)}
+          <div class="db">
+            <div class="top"><span class="k">${esc(d.brand)}</span><span class="badge ${d.status}">${d.status === "now" ? "ON NOW" : "SOON"}</span></div>
+            <div class="big">${esc(d.big)}</div>
+            <h4>${esc(d.offer)}</h4>
+            ${d.conditions ? `<div class="cond">${esc(d.conditions)}</div>` : ""}
+            <div class="runs mono">${esc(runs(d))}</div>
+            <div class="via mono">via ${esc(d.source)}</div>
+          </div></a>`).join("")}</section>`
+        : `<div class="empty mono">No meal deals on right now. Offers are checked daily at 5 AM.</div>`}`;
 
     // ---- Red Bull Edition Watch
     const rb = S.redbull || [];

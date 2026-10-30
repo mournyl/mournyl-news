@@ -8,5 +8,20 @@
     "binding": "ASSETS",
     "run_worker_first": ["/api/*"]
   },
+
+  // Workers AI: reads deal articles and pulls out the exact offer (free daily allowance covers this)
+  "ai": { "binding": "AI" },
+
+  // Stores the extracted meal deals. Wrangler creates this automatically on deploy.
+  // If your wrangler can't, run:  npx wrangler kv namespace create DEALS  and paste the id below.
+  "kv_namespaces": [
+    { "binding": "DEALS" }
+  ],
+
+  // Refresh meal deals once a day at 5:00 AM Eastern.
+  // Crons are UTC: 09:00 UTC = 5 AM EDT (summer), 10:00 UTC = 5 AM EST (winter).
+  // Both fire; the Worker only runs the one that lands on 5 AM in New York.
+  "triggers": { "crons": ["0 9 * * *", "0 10 * * *"] },
+
   "observability": { "enabled": true }
 }

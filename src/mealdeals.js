@@ -1,0 +1,205 @@
+// Meal Deals: real, structured restaurant offers.
+//
+// Once a day at 5 AM Eastern (cron in wrangler.jsonc), and on first load if nothing is stored yet:
+//   1. collect recent deal articles from the feeds below
+//   2. read each FULL article and have Workers AI extract ONLY what the article states:
+//      brand, exact offer, conditions, start/end dates. Anything that isn't a concrete,
+//      redeemable offer is thrown out
+//   3. check the extraction against the article text (brand + any price/percent must appear in it)
+//   4. keep offers that are running now or start within 14 days; expired ones drop off automatically
+// Results live in KV (binding DEALS) so each article is only processed once.
+
+import { getFeed, bing, decode, UA } from "./news.js";
+
+const SOURCES = [
+  ["Fast Food Post", "https://www.fastfoodpost.com/feed/"],
+  ["Chew Boom", "https://chewboom.substack.com/feed"],
+  ["Bing News", bing("fast food deal")],
+  ["Bing News", bing("restaurant BOGO deal")],
+  ["Bing News", bing("free food deal today")],
+  ["Bing News", bing("national day free restaurant deal")],
+];
+const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const FALLBACK_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
+const MAX_ARTICLE_AGE_DAYS = 21;   // only read articles this new
+const UPCOMING_DAYS = 14;          // show offers that start within this window
+const NEW_PER_RUN = 40;            // articles read per daily run (~3,400 AI neurons, well under the 10,000/day free allowance)
+const SHOW = 8;
+const TZ = "America/New_York";
+const DAY = 864e5;
+
+const todayStr = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+const addDays = (s, n) => todayStr(new Date(Date.parse(s + "T12:00:00Z") + n * DAY));
+
+// ---------------------------------------------------------------- read side (used by /api/news)
+export async function getMealDeals(env, ctx) {
+  if (!env || !env.DEALS) return [];
+  const stored = await env.DEALS.get("mealdeals", "json");
+  if (!stored || Date.now() - Date.parse(stored.built) > 30 * 36e5) {
+    // nothing stored yet, or the 5 AM run was missed → rebuild once in the background
+    if (env.AI) ctx.waitUntil(buildMealDeals(env).catch(() => {}));
+  }
+  return live(stored ? stored.offers : []).slice(0, SHOW);
+}
+
+// re-check dates at read time so a deal disappears the moment it ends
+function live(offers) {
+  const today = todayStr(), soon = addDays(today, UPCOMING_DAYS);
+  return offers
+    .filter(o => (!o.end_date || o.end_date >= today) && (!o.start_date || o.start_date <= soon))
+    .map(o => ({ ...o, status: o.start_date && o.start_date > today ? "soon" : "now" }))
+    .sort((a, b) => (a.status === b.status ? 0 : a.status === "now" ? -1 : 1)
+      || (a.end_date || "9999").localeCompare(b.end_date || "9999")
+      || (b.ts || 0) - (a.ts || 0));
+}
+
+// ---------------------------------------------------------------- build side (cron)
+export async function buildMealDeals(env) {
+  if (!env.DEALS || !env.AI) return;
+  const lock = await env.DEALS.get("mealdeals:lock");
+  if (lock) return;
+  await env.DEALS.put("mealdeals:lock", "1", { expirationTtl: 300 });
+
+  const now = Date.now();
+  const res = await Promise.allSettled(SOURCES.map(([n, u]) => getFeed(n, u)));
+  const seen = new Set();
+  const candidates = res.flatMap(r => (r.status === "fulfilled" ? r.value : []))
+    .filter(i => i.ts && now - i.ts < MAX_ARTICLE_AGE_DAYS * DAY && !/news\.google\.com/.test(i.link))
+    .filter(i => /deal|free|bogo|buy one|\$\d|% off|offer|discount|promo|coupon|for \$|half|national .* day|returns|value|happy hour/i.test(i.title))
+    .filter(i => !/\b(stock|shares|earnings|lawsuit|recall|layoffs?|bankrupt|ceo|analyst|investors?)\b/i.test(i.title))
+    .filter(i => { const k = i.link.split("?")[0]; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => b.ts - a.ts);
+
+  const prev = (await env.DEALS.get("mealdeals", "json")) || { offers: [] };
+  const offers = [...prev.offers];
+  let processed = 0;
+
+  for (const item of candidates) {
+    const key = "x:" + (await sha1(item.link.split("?")[0]));
+    let result = await env.DEALS.get(key, "json");
+    if (!result) {
+      if (processed >= NEW_PER_RUN) continue;
+      processed++;
+      result = await extract(env, item).catch(() => null);
+      await env.DEALS.put(key, JSON.stringify(result || { is_offer: false }), { expirationTtl: 40 * 86400 });
+    }
+    if (result && result.is_offer) {
+      for (const o of [].concat(result.offers || [])) {
+        offers.push({ ...o, link: item.link, source: item.source, ts: item.ts, image: result.image || item.image || null });
+      }
+    }
+  }
+
+  // de-dupe (same brand + same headline offer), keep the newest article
+  const byKey = new Map();
+  for (const o of offers.sort((a, b) => (b.ts || 0) - (a.ts || 0))) {
+    const k = (o.brand + "|" + o.big).toLowerCase().replace(/[^a-z0-9|$%]/g, "");
+    if (!byKey.has(k)) byKey.set(k, o);
+  }
+  const keep = live([...byKey.values()]).slice(0, 40);
+  await env.DEALS.put("mealdeals", JSON.stringify({ built: new Date().toISOString(), offers: keep }));
+  await env.DEALS.delete("mealdeals:lock");
+}
+
+// ---------------------------------------------------------------- AI extraction
+const SCHEMA = {
+  type: "object",
+  properties: {
+    is_offer: { type: "boolean" },
+    offers: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          brand: { type: "string" },
+          big: { type: "string" },
+          offer: { type: "string" },
+          conditions: { type: ["string", "null"] },
+          start_date: { type: ["string", "null"] },
+          end_date: { type: ["string", "null"] },
+        },
+        required: ["brand", "big", "offer"],
+      },
+    },
+  },
+  required: ["is_offer", "offers"],
+};
+
+async function extract(env, item) {
+  const page = await getArticle(item.link);
+  if (!page || page.text.length < 200) return null;
+  const today = todayStr();
+  const published = item.date ? item.date.slice(0, 10) : "unknown";
+
+  const messages = [
+    { role: "system", content:
+`You extract restaurant and fast-food promotions from news articles for a deals board.
+Rules:
+- Use ONLY facts stated in the article. Never guess or invent prices, dates, or conditions.
+- is_offer = true only if the article describes at least one specific, redeemable promotion at a restaurant/food chain (a discount, BOGO, freebie, price deal, or limited-time value bundle with a price). New menu items without a deal, earnings, lawsuits, openings and reviews are NOT offers.
+- For each distinct offer (max 3):
+  brand: the chain name exactly as written (e.g. "Wendy's").
+  big: a very short label of the deal, max 10 characters, e.g. "BOGO", "FREE", "$6", "$1", "50% OFF", "2 FOR $6". Any number in it must appear in the article.
+  offer: one short sentence saying exactly what you get, e.g. "Buy one Whopper, get one free".
+  conditions: requirements like "App only", "Rewards members", "Wear a costume", "After 3 PM", "Participating locations" joined with " · ", or null.
+  start_date / end_date: YYYY-MM-DD if the article states them (resolve weekdays/relative dates using the article's publish date), else null.
+- Article published: ${published}. Today: ${today}.
+Respond with JSON only.` },
+    { role: "user", content: `TITLE: ${item.title}\n\nARTICLE:\n${page.text.slice(0, 6000)}` },
+  ];
+
+  let out;
+  for (const model of [MODEL, FALLBACK_MODEL]) {
+    try {
+      const r = await env.AI.run(model, { messages, max_tokens: 600, temperature: 0, response_format: { type: "json_schema", json_schema: SCHEMA } });
+      out = typeof r.response === "string" ? JSON.parse(r.response.slice(r.response.indexOf("{"), r.response.lastIndexOf("}") + 1)) : r.response;
+      if (out) break;
+    } catch { /* try fallback model */ }
+  }
+  if (!out || !out.is_offer || !Array.isArray(out.offers)) return { is_offer: false };
+
+  // verify against the article text so nothing is made up
+  const hay = (item.title + " " + page.text).toLowerCase();
+  const offers = out.offers.filter(o => {
+    if (!o || !o.brand || !o.big || !o.offer) return false;
+    const brandWord = o.brand.toLowerCase().replace(/[’']/g, "'").split(/\s+/)[0].replace(/[^a-z0-9']/g, "");
+    if (brandWord.length < 2 || !hay.replace(/[’]/g, "'").includes(brandWord)) return false;
+    const nums = (o.big + " " + o.offer).match(/\d+(?:\.\d+)?/g) || [];
+    if (!nums.every(n => hay.includes(n))) return false;
+    o.big = o.big.toUpperCase().slice(0, 12);
+    o.start_date = validDate(o.start_date);
+    o.end_date = validDate(o.end_date);
+    if (o.end_date && o.end_date < today) return false;
+    if (!o.end_date && item.ts && Date.now() - item.ts > 14 * DAY) return false; // undated + old article → assume over
+    return true;
+  }).slice(0, 3);
+  return { is_offer: offers.length > 0, offers, image: page.image };
+}
+
+function validDate(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s)) ? s : null; }
+
+async function getArticle(url) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, redirect: "follow", headers: { "user-agent": UA, accept: "text/html" }, cf: { cacheTtl: 21600, cacheEverything: true } });
+    if (!r.ok || !/html/.test(r.headers.get("content-type") || "")) return null;
+    let html = (await r.text()).slice(0, 600000);
+    const og = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]*content=["']([^"']+)["']/i)
+      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+    const art = html.match(/<article[\s\S]*?<\/article>/i) || html.match(/<main[\s\S]*?<\/main>/i);
+    if (art) html = art[0];
+    const text = decode(html
+      .replace(/<(script|style|noscript|svg|nav|footer|header|aside|form|figure)[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<\/(p|h\d|li|div|br)>/gi, "\n").replace(/<[^>]+>/g, " "))
+      .replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
+    let image = null;
+    try { if (og) image = new URL(decode(og[1]), r.url || url).toString().replace(/^http:/, "https:"); } catch {}
+    return { text, image };
+  } catch { return null; } finally { clearTimeout(t); }
+}
+
+async function sha1(s) {
+  const b = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join("");
+}

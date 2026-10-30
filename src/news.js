@@ -1,15 +1,16 @@
 // News handler → GET /api/news (called from src/worker.js)
+import { getMealDeals } from "./mealdeals.js";
 // Builds the page data from public RSS feeds. Cached at Cloudflare's edge for 15 minutes.
 //
 //  big      the 3 biggest stories of the day = the stories the most outlets are covering right now
-//  meals    fast-food / restaurant deals from the last 30 days
+//  meals    structured restaurant offers (brand, exact offer, conditions, dates), from src/mealdeals.js
 //  redbull  Red Bull edition / flavor news from the last 30 days
 //  deals    general deals from the last few days
 //
 // To change sources: edit the lists below, commit, push.
 
 const gnews = (q) => `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;
-const bing = (q) => `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&qft=sortbydate%3d%221%22`;
+export const bing = (q) => `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&qft=sortbydate%3d%221%22`;
 
 // Outlets used to find the day's biggest stories (more outlets covering it = bigger)
 const TOP_FEEDS = [
@@ -26,13 +27,6 @@ const TOP_FEEDS = [
 const GOOGLE_TOP = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"; // editor-ranked, used as a tiebreaker
 
 const FEEDS = {
-  meals: [
-    ["Fast Food Post", "https://www.fastfoodpost.com/feed/"],
-    ["Chew Boom", "https://chewboom.substack.com/feed"],
-    ["Bing News", bing("fast food deal")],
-    ["Bing News", bing("restaurant BOGO free deal")],
-    ["Google News", gnews("fast food deal OR BOGO OR \"free\" restaurant when:14d")],
-  ],
   redbull: [
     ["Bing News", bing("\"Red Bull\" edition flavor")],
     ["Google News", gnews("\"Red Bull\" edition flavor when:30d")],
@@ -46,22 +40,20 @@ const FEEDS = {
 };
 
 const DAY = 864e5;
-const MAX_AGE = { big: 1.5 * DAY, meals: 30 * DAY, redbull: 30 * DAY, deals: 4 * DAY };
-const LIMIT = { meals: 8, redbull: 4, deals: 8 };
+const MAX_AGE = { big: 1.5 * DAY, redbull: 30 * DAY, deals: 4 * DAY };
+const LIMIT = { redbull: 4, deals: 8 };
 const FILTER = {
-  meals: (i) => (/\$\d|\d+% off/i.test(i.title) || /\b(bogo|buy one|free|deals?|discount|offers?|promo|coupon|half[- ]off|value|combo|happy hour|returns?|is back|limited[- ]time|launch(es)?|debuts?)\b/i.test(i.title))
-    && !/\b(stock|shares|earnings|lawsuit|recall|layoffs?|closing|closes|bankrupt|ceo|analyst|investors?)\b/i.test(i.title),
   redbull: (i) => /red ?bull/i.test(i.title + " " + i.summary)
     && /\b(edition|flavou?r|limited|new|launch|taste|review|winter|spring|summer|sugar ?free|zero|can)\b/i.test(i.title)
     && !/racing|f1|formula|verstappen|grand prix|motogp|salzburg|leipzig|red bulls\b|cliff div|ktm|athlete|stunt/i.test(i.title),
 };
 
 const CACHE_SECONDS = 900;
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+export const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
-export async function handleNews(request, ctx) {
+export async function handleNews(request, ctx, env) {
   const cache = caches.default;
-  const key = new Request(new URL("/api/news?v=3", request.url).toString());
+  const key = new Request(new URL("/api/news?v=4", request.url).toString());
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -79,12 +71,14 @@ export async function handleNews(request, ctx) {
     }),
   ]);
   const sections = { big, ...Object.fromEntries(rest) };
+  // meal deals = structured offers extracted from full articles (see src/mealdeals.js)
+  sections.meals = await getMealDeals(env, ctx);
 
   // fill in missing photos from each article's own page (og:image)
-  const need = [...sections.big, ...sections.meals, ...sections.redbull].filter(i => !i.image && !/news\.google\.com/.test(i.link)).slice(0, 18);
+  const need = [...sections.big, ...sections.redbull].filter(i => !i.image && !/news\.google\.com/.test(i.link)).slice(0, 18);
   await Promise.allSettled(need.map(async i => { i.image = await ogImage(i.link); }));
   // prefer items with photos for the visual sections
-  for (const sec of ["meals", "redbull"]) {
+  for (const sec of ["redbull"]) {
     sections[sec] = sections[sec].sort((a, b) => (!!b.image - !!a.image) || b.ts - a.ts).slice(0, LIMIT[sec]);
   }
   sections.deals = sections.deals.slice(0, LIMIT.deals);
@@ -149,7 +143,7 @@ function tokens(t) {
 function overlap(a, b) { let n = 0; for (const t of a) if (b.has ? b.has(t) : b.includes(t)) n++; return n; }
 
 // ---------------------------------------------------------------- fetching
-async function getFeed(name, url) {
+export async function getFeed(name, url) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 8000);
   try {
@@ -174,7 +168,7 @@ async function ogImage(url) {
     reader.cancel().catch(() => {});
     const m = html.match(/<meta[^>]+(?:property|name)=["'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["'][^>]*content=["']([^"']+)["']/i)
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image)["']/i);
-    return m ? new URL(decode(m[1]), r.url).toString().replace(/^http:/, "https:") : null;
+    try { return m ? new URL(decode(m[1]), r.url || url).toString().replace(/^http:/, "https:") : null; } catch { return null; }
   } catch { return null; } finally { clearTimeout(t); }
 }
 
@@ -241,12 +235,12 @@ function upgrade(u) {
 function clean(s) {
   return decode(String(s || "").replace(/<!\[CDATA\[|\]\]>/g, "")).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").replace(/The post .* appeared first on .*$/i, "").trim();
 }
-function decode(s) {
+export function decode(s) {
   return String(s || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&nbsp;/g, " ")
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16))).replace(/&amp;/g, "&");
 }
 function truncate(s, n) { return s.length > n ? s.slice(0, s.lastIndexOf(" ", n)) + "…" : s; }
-function dedupe(items) {
+export function dedupe(items) {
   const seen = new Set();
   return items.filter(i => { const k = i.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").slice(0, 8).join(" "); if (seen.has(k)) return false; seen.add(k); return true; });
 }

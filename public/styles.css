@@ -155,3 +155,13 @@ a:hover .pic img { transform: scale(1.03); }
   .rbl { padding-right: 0; }
   .foot { flex-direction: column; }
 }
+
+/* ---------- structured meal-deal cards ---------- */
+.deal.hot { border-color: #fff; }
+.badge { font-size: 9px; font-weight: 800; letter-spacing: .16em; padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
+.badge.now { background: #fff; color: #000; }
+.badge.soon { border: 1px solid #fff; color: #fff; }
+.cond { font-size: 12px; color: #bdbdbd; margin-top: 8px; line-height: 1.35; }
+.runs { font-size: 10.5px; color: #fff; margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--line2); }
+.via { font-size: 9.5px; color: var(--dim); margin-top: 4px; }
+.deal.meal h4 { -webkit-line-clamp: 2; }
