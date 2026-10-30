@@ -165,3 +165,12 @@ a:hover .pic img { transform: scale(1.03); }
 .runs { font-size: 10.5px; color: #fff; margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--line2); }
 .via { font-size: 9.5px; color: var(--dim); margin-top: 4px; }
 .deal.meal h4 { -webkit-line-clamp: 2; }
+
+/* ---------- photos fill the card edge to edge (no white side bars) ---------- */
+.deal .pic, .deal.meal .pic { background: #0d0d0d; }
+.deal .pic img, .deal.meal .pic img { object-fit: cover; object-position: center; padding: 0; width: 100%; height: 100%; }
+
+/* ---------- meal deals: first 8, then "show all" ---------- */
+.deals.clip > .deal:nth-child(n+9) { display: none; }
+.showall { display: block; margin: 16px auto 0; padding: 10px 18px; border: 1px solid #fff; border-radius: 999px; font-size: 12px; letter-spacing: .06em; }
+.showall:hover { background: #fff; color: #000; }

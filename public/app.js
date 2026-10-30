@@ -4,12 +4,16 @@
   const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? esc(u) : "#");
   const A = (u) => `href="${safeUrl(u)}" target="_blank" rel="noopener"`;
 
-  // ---------- dates ----------
+  // ---------- edition ----------
+  // First issue of mournyl news. Issue No. 1 = this date, and it counts up by one each day (Eastern time).
+  const LAUNCH_DATE = "2026-10-30";
+
   const now = new Date();
-  const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 864e5);
+  const etDate = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  const issueNo = Math.max(1, Math.round((Date.parse(etDate(now)) - Date.parse(LAUNCH_DATE)) / 864e5) + 1);
   $("#today").textContent = now.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric" }).replace(/,/g, "").toUpperCase();
   $("#year").textContent = now.getFullYear();
-  $("#mast-left").innerHTML = `EST. 2026<br>ISSUE NO. ${dayOfYear}`;
+  $("#mast-left").innerHTML = `EST. ${LAUNCH_DATE.slice(0, 4)}<br>ISSUE NO. ${issueNo}`;
   $("#mast-right").innerHTML = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + "<br><span id='mast-upd'>Daily edition</span>";
 
   const ago = (iso) => {
@@ -78,7 +82,7 @@
     };
     $("#meals").innerHTML = `
       <div class="sech"><h5>Meal Deals</h5><span>Updated daily 5 AM · on now or starting soon</span></div>
-      ${meals.length ? `<section class="deals">${meals.map(d => `
+      ${meals.length ? `<section class="deals${meals.length > 8 ? " clip" : ""}" id="mealgrid">${meals.map(d => `
         <a class="deal meal${d.image ? "" : " noimg"}${d.status === "now" ? " hot" : ""}" ${A(d.link)}>${pic(d)}
           <div class="db">
             <div class="top"><span class="k">${esc(d.brand)}</span><span class="badge ${d.status}">${d.status === "now" ? "ON NOW" : "SOON"}</span></div>
@@ -87,8 +91,11 @@
             ${d.conditions ? `<div class="cond">${esc(d.conditions)}</div>` : ""}
             <div class="runs mono">${esc(runs(d))}</div>
             <div class="via mono">via ${esc(d.source)}</div>
-          </div></a>`).join("")}</section>`
+          </div></a>`).join("")}</section>
+        ${meals.length > 8 ? `<button class="showall mono" id="mealmore">Show all ${meals.length} deals ↓</button>` : ""}`
         : `<div class="empty mono">No meal deals on right now. Offers are checked daily at 5 AM.</div>`}`;
+    const mm = document.getElementById("mealmore");
+    if (mm) mm.onclick = () => { document.getElementById("mealgrid").classList.remove("clip"); mm.remove(); };
 
     // ---- Red Bull Edition Watch
     const rb = S.redbull || [];

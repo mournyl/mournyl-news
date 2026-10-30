@@ -18,13 +18,18 @@ const SOURCES = [
   ["Bing News", bing("restaurant BOGO deal")],
   ["Bing News", bing("free food deal today")],
   ["Bing News", bing("national day free restaurant deal")],
+  // roundups list many chains at once, so they're the richest source
+  ["Bing News", bing("fast food deals this week")],
+  ["Bing News", bing("restaurant deals this week")],
+  ["Bing News", bing("free food deals")],
+  ["Bing News", bing("food deals today")],
 ];
 const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const FALLBACK_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 const MAX_ARTICLE_AGE_DAYS = 21;   // only read articles this new
 const UPCOMING_DAYS = 14;          // show offers that start within this window
-const NEW_PER_RUN = 40;            // articles read per daily run (~3,400 AI neurons, well under the 10,000/day free allowance)
-const SHOW = 8;
+const NEW_PER_RUN = 30;            // articles read per daily run (~6,000 AI neurons incl. big roundups; free allowance is 10,000/day)
+const SHOW = 24;                   // page shows 8, "Show all" reveals the rest
 const TZ = "America/New_York";
 const DAY = 864e5;
 
@@ -85,7 +90,7 @@ export async function buildMealDeals(env) {
     }
     if (result && result.is_offer) {
       for (const o of [].concat(result.offers || [])) {
-        offers.push({ ...o, link: item.link, source: item.source, ts: item.ts, image: result.image || item.image || null });
+        offers.push({ ...o, link: item.link, source: item.source, ts: item.ts, image: o.image || result.image || item.image || null });
       }
     }
   }
@@ -96,7 +101,7 @@ export async function buildMealDeals(env) {
     const k = (o.brand + "|" + o.big).toLowerCase().replace(/[^a-z0-9|$%]/g, "");
     if (!byKey.has(k)) byKey.set(k, o);
   }
-  const keep = live([...byKey.values()]).slice(0, 40);
+  const keep = live([...byKey.values()]).slice(0, 60);
   await env.DEALS.put("mealdeals", JSON.stringify({ built: new Date().toISOString(), offers: keep }));
   await env.DEALS.delete("mealdeals:lock");
 }
@@ -137,7 +142,7 @@ async function extract(env, item) {
 Rules:
 - Use ONLY facts stated in the article. Never guess or invent prices, dates, or conditions.
 - is_offer = true only if the article describes at least one specific, redeemable promotion at a restaurant/food chain (a discount, BOGO, freebie, price deal, or limited-time value bundle with a price). New menu items without a deal, earnings, lawsuits, openings and reviews are NOT offers.
-- For each distinct offer (max 3):
+- List EVERY distinct offer in the article (roundups often cover 10+ chains; up to 15):
   brand: the chain name exactly as written (e.g. "Wendy's").
   big: a very short label of the deal, max 10 characters, e.g. "BOGO", "FREE", "$6", "$1", "50% OFF", "2 FOR $6". Any number in it must appear in the article.
   offer: one short sentence saying exactly what you get, e.g. "Buy one Whopper, get one free".
@@ -145,13 +150,13 @@ Rules:
   start_date / end_date: YYYY-MM-DD if the article states them (resolve weekdays/relative dates using the article's publish date), else null.
 - Article published: ${published}. Today: ${today}.
 Respond with JSON only.` },
-    { role: "user", content: `TITLE: ${item.title}\n\nARTICLE:\n${page.text.slice(0, 6000)}` },
+    { role: "user", content: `TITLE: ${item.title}\n\nARTICLE:\n${page.text.slice(0, 9000)}` },
   ];
 
   let out;
   for (const model of [MODEL, FALLBACK_MODEL]) {
     try {
-      const r = await env.AI.run(model, { messages, max_tokens: 600, temperature: 0, response_format: { type: "json_schema", json_schema: SCHEMA } });
+      const r = await env.AI.run(model, { messages, max_tokens: 1800, temperature: 0, response_format: { type: "json_schema", json_schema: SCHEMA } });
       out = typeof r.response === "string" ? JSON.parse(r.response.slice(r.response.indexOf("{"), r.response.lastIndexOf("}") + 1)) : r.response;
       if (out) break;
     } catch { /* try fallback model */ }
@@ -171,9 +176,24 @@ Respond with JSON only.` },
     o.end_date = validDate(o.end_date);
     if (o.end_date && o.end_date < today) return false;
     if (!o.end_date && item.ts && Date.now() - item.ts > 14 * DAY) return false; // undated + old article → assume over
+    o.image = imageFor(page, o.brand) || null;   // the photo next to this chain in the article
     return true;
-  }).slice(0, 3);
+  }).slice(0, 15);
   return { is_offer: offers.length > 0, offers, image: page.image };
+}
+
+// nearest inline photo to where the article talks about this chain (prefers the image just before/after)
+function imageFor(page, brand) {
+  if (!page.imgs || !page.imgs.length) return null;
+  const word = brand.toLowerCase().replace(/[’]/g, "'").split(/\s+/)[0];
+  const at = page.lower.replace(/[’]/g, "'").indexOf(word);
+  if (at < 0 || page.imgs.length < 2) return null;            // single-photo article → use its main image
+  let best = null, dist = Infinity;
+  for (const im of page.imgs) {
+    const d = im.pos <= at ? at - im.pos : (im.pos - at) * 1.5; // slight preference for the photo above the text
+    if (d < dist) { dist = d; best = im; }
+  }
+  return dist < 6000 ? best.src : null;
 }
 
 function validDate(s) { return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s)) ? s : null; }
@@ -189,13 +209,25 @@ async function getArticle(url) {
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image)["']/i);
     const art = html.match(/<article[\s\S]*?<\/article>/i) || html.match(/<main[\s\S]*?<\/main>/i);
     if (art) html = art[0];
+    // inline photos with their position, so each chain in a roundup gets its own picture
+    const base = r.url || url;
+    const imgs = [];
+    for (const m of html.matchAll(/<img\b[^>]*>/gi)) {
+      const tagStr = m[0];
+      if (/\b(width|height)=["']?(\d{1,2})["'\s>]/i.test(tagStr) || /(logo|avatar|icon|emoji|pixel|spinner|badge|author)/i.test(tagStr)) continue;
+      const src = (tagStr.match(/\b(?:data-src|data-lazy-src|src)=["']([^"']+)["']/i) || [])[1]
+        || ((tagStr.match(/\bsrcset=["']([^"']+)["']/i) || [])[1] || "").split(",").pop().trim().split(" ")[0];
+      if (!src || src.startsWith("data:")) continue;
+      try { imgs.push({ pos: m.index, src: new URL(decode(src), base).toString().replace(/^http:/, "https:") }); } catch {}
+    }
+    const lower = html.toLowerCase();
     const text = decode(html
       .replace(/<(script|style|noscript|svg|nav|footer|header|aside|form|figure)[\s\S]*?<\/\1>/gi, " ")
       .replace(/<\/(p|h\d|li|div|br)>/gi, "\n").replace(/<[^>]+>/g, " "))
       .replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
     let image = null;
     try { if (og) image = new URL(decode(og[1]), r.url || url).toString().replace(/^http:/, "https:"); } catch {}
-    return { text, image };
+    return { text, image, imgs, lower };
   } catch { return null; } finally { clearTimeout(t); }
 }
 
