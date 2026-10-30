@@ -174,3 +174,25 @@ a:hover .pic img { transform: scale(1.03); }
 .deals.clip > .deal:nth-child(n+9) { display: none; }
 .showall { display: block; margin: 16px auto 0; padding: 10px 18px; border: 1px solid #fff; border-radius: 999px; font-size: 12px; letter-spacing: .06em; }
 .showall:hover { background: #fff; color: #000; }
+
+/* ---------- Charleston local news ---------- */
+.localgrid { display: grid; grid-template-columns: 1.6fr 1fr 1fr; grid-template-rows: auto auto; gap: 18px 24px; }
+.lc1 { grid-row: span 2; }
+.lc .pic { margin-bottom: 10px; }
+.lc h4 { font-size: 15px; line-height: 1.3; margin-top: 6px; }
+.lc1 h4 { font-size: 24px; line-height: 1.15; }
+.localgrid .lc:nth-child(n+6) { display: none; }
+
+/* ---------- meal-deal logo panel ---------- */
+.deal.meal .logo { position: relative; height: 140px; background: #fff; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--line); }
+.deal.meal .logo img { max-width: 72%; max-height: 96px; object-fit: contain; }
+.deal.meal .logo b { color: #000; font-size: 26px; font-weight: 900; letter-spacing: -.02em; text-align: center; padding: 0 16px; line-height: 1.05; }
+.chs { position: absolute; top: 10px; left: 10px; background: #000; color: #fff; font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .14em; padding: 3px 6px; border-radius: 3px; }
+
+/* ---------- local weather + local sports ---------- */
+.wx b { color: #fff; }
+.loc { font-style: normal; font-size: 8.5px; letter-spacing: .14em; background: #fff; color: #000; padding: 1px 5px; border-radius: 3px; margin-left: 6px; }
+.game.local { border-color: #fff; }
+
+@media (max-width: 1200px) { .localgrid { grid-template-columns: 1fr 1fr; } .lc1 { grid-column: 1 / -1; grid-row: auto; } }
+@media (max-width: 720px) { .localgrid { grid-template-columns: 1fr; } .wx { display: none; } }

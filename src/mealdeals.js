@@ -23,8 +23,19 @@ const SOURCES = [
   ["Bing News", bing("restaurant deals this week")],
   ["Bing News", bing("free food deals")],
   ["Bing News", bing("food deals today")],
+  // Charleston, SC area
+  ["Bing News", bing("Charleston SC restaurant deals")],
+  ["Bing News", bing("Charleston happy hour deal")],
+  ["Bing News", bing("Charleston SC free food")],
+  ["Bing News", bing("Mount Pleasant Summerville restaurant deal")],
+  ["Charleston City Paper", "https://charlestoncitypaper.com/feed/"],
 ];
+export const AREA = "Charleston, South Carolina (the Lowcountry: Charleston, North Charleston, Mount Pleasant, Summerville, James Island, West Ashley, Goose Creek)";
+
+// Not restaurants: shopping/grocery/retail stories never count as meal deals
+const NOT_RESTAURANT = /\b(walmart|target|costco|sam'?s club|aldi|kroger|publix|harris teeter|food lion|lidl|whole foods|trader joe'?s|amazon|best buy|home depot|lowe'?s|kohl'?s|macy'?s|cvs|walgreens|dollar general|dollar tree|instacart|doordash|uber ?eats|grubhub|hellofresh|grocery|supermarket)\b/i;
 const MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const WIKI_UA = "mournyl-news/1.0 (https://news.mournyl.com)";
 const FALLBACK_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 const AI_TIMEOUT_MS = 45000;
 const MAX_ARTICLE_AGE_DAYS = 21;   // only read articles this new
@@ -67,9 +78,11 @@ export async function dealsStatus(env) {
 function live(offers) {
   const today = todayStr(), soon = addDays(today, UPCOMING_DAYS);
   return offers
+    .filter(o => !NOT_RESTAURANT.test(o.brand || "") && o.scope !== "elsewhere")
     .filter(o => (!o.end_date || o.end_date >= today) && (!o.start_date || o.start_date <= soon))
     .map(o => ({ ...o, status: o.start_date && o.start_date > today ? "soon" : "now" }))
-    .sort((a, b) => (a.status === b.status ? 0 : a.status === "now" ? -1 : 1)
+    .sort((a, b) => ((b.scope === "charleston") - (a.scope === "charleston"))
+      || (a.status === b.status ? 0 : a.status === "now" ? -1 : 1)
       || (a.end_date || "9999").localeCompare(b.end_date || "9999")
       || (b.ts || 0) - (a.ts || 0));
 }
@@ -130,11 +143,12 @@ async function collect(env, prev) {
     .filter(i => i.ts && now - i.ts < MAX_ARTICLE_AGE_DAYS * DAY && !/news\.google\.com/.test(i.link))
     .filter(i => /deal|free|bogo|buy one|\$\d|% off|offer|discount|promo|coupon|for \$|half|national .* day|returns|value|happy hour/i.test(i.title))
     .filter(i => !/\b(stock|shares|earnings|lawsuit|recall|layoffs?|bankrupt|ceo|analyst|investors?|take-private|takeover|acquisition)\b/i.test(i.title))
+    .filter(i => !NOT_RESTAURANT.test(i.title))
     .filter(i => { const k = i.link.split("?")[0]; if (seen.has(k)) return false; seen.add(k); return true; })
     .sort((a, b) => b.ts - a.ts);
   const queue = [];
   for (const i of fresh) {
-    const key = "x3:" + (await sha1(i.link.split("?")[0]));
+    const key = "x4:" + (await sha1(i.link.split("?")[0]));
     if (doneKeys.has(key)) continue;
     queue.push({ key, title: i.title, link: i.link, source: i.source, ts: i.ts, date: i.date, image: i.image });
     if (queue.length >= QUEUE_MAX) break;
@@ -183,7 +197,7 @@ async function status(env, patch) {
 
 function addOffers(list, result, item) {
   if (!result || !result.is_offer || !item) return;
-  for (const o of [].concat(result.offers || [])) list.push({ ...o, link: item.link, source: item.source, ts: item.ts, image: o.image || result.image || item.image || null });
+  for (const o of [].concat(result.offers || [])) list.push({ ...o, link: item.link, source: item.source, ts: item.ts, image: o.logo || null });
 }
 // same brand + same headline offer → keep the newest article
 function dedupeOffers(offers) {
@@ -211,6 +225,7 @@ const SCHEMA = {
           conditions: { type: ["string", "null"] },
           start_date: { type: ["string", "null"] },
           end_date: { type: ["string", "null"] },
+          scope: { type: "string", enum: ["national", "charleston", "elsewhere"] },
         },
         required: ["brand", "big", "offer"],
       },
@@ -227,15 +242,17 @@ async function extract(env, item) {
 
   const messages = [
     { role: "system", content:
-`You extract restaurant and fast-food promotions from news articles for a deals board.
+`You extract restaurant and fast-food promotions from news articles for a deals board for people in ${AREA}.
 Rules:
 - Use ONLY facts stated in the article. Never guess or invent prices, dates, or conditions.
-- is_offer = true only if the article describes at least one specific, redeemable promotion at a restaurant/food chain (a discount, BOGO, freebie, price deal, or limited-time value bundle with a price). New menu items without a deal, earnings, lawsuits, openings and reviews are NOT offers.
+- is_offer = true only if the article describes at least one specific, redeemable promotion at a RESTAURANT, fast-food chain, coffee shop, pizza chain, bakery/doughnut shop, or bar (a discount, BOGO, freebie, price deal, happy-hour special, or limited-time value bundle with a price).
+- NOT offers: grocery stores and retailers (Walmart, Target, Costco, Aldi, Kroger, Publix, Amazon, etc.), shopping guides or "what to buy" lists, delivery-app promos, new menu items without a deal, earnings, lawsuits, openings, and reviews.
 - List EVERY distinct offer in the article (roundups often cover 10+ chains; up to 15):
   brand: the chain name exactly as written (e.g. "Wendy's").
   big: a very short label of the deal, max 10 characters, e.g. "BOGO", "FREE", "$6", "$1", "50% OFF", "2 FOR $6". Any number in it must appear in the article.
   offer: one short sentence saying exactly what you get, e.g. "Buy one Whopper, get one free".
   conditions: requirements like "App only", "Rewards members", "Wear a costume", "After 3 PM", "Participating locations" joined with " · ", or null.
+  scope: "national" if the offer runs at a chain's locations nationwide (or most US locations); "charleston" if it is specifically in the Charleston SC area or South Carolina; "elsewhere" if it only applies in another city, state, or country.
   start_date / end_date: YYYY-MM-DD if the article states them (resolve weekdays/relative dates using the article's publish date), else null.
 - Article published: ${published}. Today: ${today}.
 Respond with JSON only.` },
@@ -271,10 +288,39 @@ Respond with JSON only.` },
     o.end_date = validDate(o.end_date);
     if (o.end_date && o.end_date < today) return false;
     if (!o.end_date && item.ts && Date.now() - item.ts > 14 * DAY) return false; // undated + old article → assume over
-    o.image = imageFor(page, o.brand) || null;   // the photo next to this chain in the article
+    if (NOT_RESTAURANT.test(o.brand)) return false;
+    if (!["national", "charleston", "elsewhere"].includes(o.scope)) o.scope = "national";
+    if (o.scope === "elsewhere") return false;
     return true;
   }).slice(0, 15);
+  // company logo/picture for each brand (looked up once per brand and cached)
+  for (const o of offers) o.logo = await brandImage(env, o.brand);
   return { is_offer: offers.length > 0, offers, image: page.image };
+}
+
+// Company picture from Wikipedia: searches "<brand> restaurant" so "Chipotle" finds Chipotle Mexican Grill, not the pepper.
+// Returns the page's lead image (usually the logo). Cached per brand in KV for 30 days; null if nothing fits.
+export async function brandImage(env, brand) {
+  const slug = "logo:" + brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const cached = await env.DEALS.get(slug, "json");
+  if (cached) return cached.url;
+  let url = null;
+  try {
+    const api = "https://en.wikipedia.org/w/api.php?format=json&formatversion=2&origin=*";
+    const q = encodeURIComponent(brand + " restaurant");
+    const sr = await (await fetch(`${api}&action=query&list=search&srlimit=5&srprop=snippet&srsearch=${q}`, { headers: { "user-agent": WIKI_UA } })).json();
+    const first = brand.toLowerCase().replace(/[’']/g, "").split(/\s+/)[0];
+    // must be named like the brand AND described as a restaurant business (so "Chipotle" ≠ the pepper)
+    const FOODBIZ = /restaurant|fast[- ]food|chain|franchise|coffee|pizza|doughnut|donut|bakery|sandwich|burger|chicken|taco|caf[eé]|diner|steakhouse|grill|ice cream/i;
+    const hit = (sr.query?.search || []).find(h => h.title.toLowerCase().replace(/[’']/g, "").includes(first) && FOODBIZ.test(h.title + " " + (h.snippet || "")) && !/\(pepper\)|\(plant\)|\(food\)$/i.test(h.title));
+    if (hit) {
+      const pi = await (await fetch(`${api}&action=query&prop=pageimages&piprop=thumbnail|original&pithumbsize=600&titles=${encodeURIComponent(hit.title)}`, { headers: { "user-agent": WIKI_UA } })).json();
+      const page = (pi.query?.pages || [])[0] || {};
+      url = page.thumbnail?.source || page.original?.source || null;
+    }
+  } catch {}
+  await env.DEALS.put(slug, JSON.stringify({ url }), { expirationTtl: 30 * 86400 });
+  return url;
 }
 
 // nearest inline photo to where the article talks about this chain (prefers the image just before/after)

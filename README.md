@@ -12,6 +12,9 @@ public/              index.html, app.js, styles.css, img/
 
 No API keys are needed. News comes from public RSS feeds, sports from ESPN's public scoreboard, and meal-deal extraction from Cloudflare Workers AI on your own account (the free daily allowance is plenty).
 
+## Edition
+First issue: **October 30, 2026**. Set by `LAUNCH_DATE` at the top of `public/app.js`. The masthead's **Issue No.** counts days since then on Eastern time: Oct 30, 2026 is No. 1, Oct 31 is No. 2, and so on.
+
 ## What's on the page
 - **Today's 3 biggest stories.** Headlines from NYT, BBC, NPR, CBS, ABC, NBC, The Guardian, Fox and the Washington Post are grouped by topic. The stories the most outlets are covering win, with Google News' top ranking as a tiebreaker. Each one shows the "Covered by N outlets" count and links to the other outlets' versions. Only the last 36 hours count.
 - **Sports.** Today's games with live scores (refreshing every minute while games are live), team logos and colors, TV channels, and league filter tabs. A "This week" calendar covers the next 6 days: every NFL game, Top-25 college games, soccer, and national-TV NBA/NHL games.

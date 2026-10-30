@@ -1,16 +1,19 @@
 // mournyl news — Cloudflare Worker entry.
 // /api/news   → biggest stories, meal deals, Red Bull watch, deals (src/news.js)
-// /api/sports → today's games + 7-day calendar (src/sports.js)
+// /api/sports → today's games + 7-day calendar, local teams first (src/sports.js)
+// /api/weather → Charleston conditions from the National Weather Service (src/weather.js)
 // cron        → refreshes the structured meal deals daily at 5 AM Eastern (src/mealdeals.js)
 // everything else → static site in /public
 import { handleNews } from "./news.js";
 import { handleSports } from "./sports.js";
+import { handleWeather } from "./weather.js";
 import { buildMealDeals, step, dealsStatus } from "./mealdeals.js";
 
 const json = (o) => new Response(JSON.stringify(o, null, 2), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
 const ROUTES = {
   "/api/news": handleNews,
   "/api/sports": handleSports,
+  "/api/weather": handleWeather,
   "/api/deals/status": async (req, ctx, env) => json(await dealsStatus(env)),
   // reads queued articles for ~40 s (3 at a time), saving after each one, then shows the status.
   // add ?fresh=1 to re-collect the feeds first. Safe to hit repeatedly.

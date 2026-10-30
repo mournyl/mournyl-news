@@ -27,6 +27,14 @@ const TOP_FEEDS = [
 const GOOGLE_TOP = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"; // editor-ranked, used as a tiebreaker
 
 const FEEDS = {
+  charleston: [ // local news
+    ["Post and Courier", "https://www.postandcourier.com/search/?f=rss&t=article&c=news&l=30&s=start_time&sd=desc"],
+    ["Live 5 News", "https://www.live5news.com/arc/outboundfeeds/rss/?outputType=xml"],
+    ["News 2 WCBD", "https://www.counton2.com/news/local-news/feed/"],
+    ["ABC News 4", "https://abcnews4.com/news/local.rss"],
+    ["Charleston City Paper", "https://charlestoncitypaper.com/feed/"],
+    ["Bing News", bing("Charleston SC")],
+  ],
   redbull: [
     ["Bing News", bing("\"Red Bull\" edition flavor")],
     ["Google News", gnews("\"Red Bull\" edition flavor when:30d")],
@@ -40,9 +48,11 @@ const FEEDS = {
 };
 
 const DAY = 864e5;
-const MAX_AGE = { big: 1.5 * DAY, redbull: 30 * DAY, deals: 4 * DAY };
-const LIMIT = { redbull: 4, deals: 8 };
+const MAX_AGE = { big: 1.5 * DAY, charleston: 2 * DAY, redbull: 30 * DAY, deals: 4 * DAY };
+const LIMIT = { charleston: 6, redbull: 4, deals: 8 };
 const FILTER = {
+  charleston: (i) => !/\b(obituar|horoscope|lottery numbers|crossword|sponsored|weather forecast)\b/i.test(i.title)
+    && (i.source !== "Bing News" || /charleston|lowcountry|mount pleasant|summerville|north charleston|james island|folly|goose creek|berkeley county|dorchester county|south carolina|\bs\.?c\.?\b/i.test(i.title + " " + i.summary)),
   redbull: (i) => /red ?bull/i.test(i.title + " " + i.summary)
     && /\b(edition|flavou?r|limited|new|launch|taste|review|winter|spring|summer|sugar ?free|zero|can)\b/i.test(i.title)
     && !/racing|f1|formula|verstappen|grand prix|motogp|salzburg|leipzig|red bulls\b|cliff div|ktm|athlete|stunt/i.test(i.title),
@@ -53,7 +63,7 @@ const CACHE_SECONDS = 900;
 
 export async function handleNews(request, ctx, env) {
   const cache = caches.default;
-  const key = new Request(new URL("/api/news?v=5", request.url).toString());
+  const key = new Request(new URL("/api/news?v=6", request.url).toString());
   const hit = await cache.match(key);
   if (hit) return hit;
 
@@ -76,10 +86,10 @@ export async function handleNews(request, ctx, env) {
   sections.meals = md.offers;
 
   // fill in missing photos from each article's own page (og:image)
-  const need = [...sections.big, ...sections.redbull].filter(i => !i.image && !/news\.google\.com/.test(i.link)).slice(0, 18);
+  const need = [...sections.big, ...sections.charleston, ...sections.redbull].filter(i => !i.image && !/news\.google\.com/.test(i.link)).slice(0, 18);
   await Promise.allSettled(need.map(async i => { i.image = await ogImage(i.link); }));
   // prefer items with photos for the visual sections
-  for (const sec of ["redbull"]) {
+  for (const sec of ["charleston", "redbull"]) {
     sections[sec] = sections[sec].sort((a, b) => (!!b.image - !!a.image) || b.ts - a.ts).slice(0, LIMIT[sec]);
   }
   sections.deals = sections.deals.slice(0, LIMIT.deals);

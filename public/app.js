@@ -14,7 +14,7 @@
   $("#today").textContent = now.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric" }).replace(/,/g, "").toUpperCase();
   $("#year").textContent = now.getFullYear();
   $("#mast-left").innerHTML = `EST. ${LAUNCH_DATE.slice(0, 4)}<br>ISSUE NO. ${issueNo}`;
-  $("#mast-right").innerHTML = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + "<br><span id='mast-upd'>Daily edition</span>";
+  $("#mast-right").innerHTML = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" }) + "<br>Charleston, SC · <span id='mast-upd'>Daily edition</span>";
 
   const ago = (iso) => {
     if (!iso) return "";
@@ -69,6 +69,15 @@
         </div>
       </section>` : `<div class="loading mono">Couldn't find today's top stories right now.</div>`;
 
+    // ---- Charleston local news
+    const loc = S.charleston || [];
+    $("#local").innerHTML = loc.length ? `
+      <div class="sech"><h5>Charleston</h5><span>Lowcountry news · last 48 hours</span></div>
+      <section class="localgrid">${loc.map((i, k) => `
+        <a class="lc${k === 0 ? " lc1" : ""}" ${A(i.link)}>${pic(i, k === 0 ? 300 : 150)}
+          <span class="k">${esc(i.source)}</span><h4>${esc(i.title)}</h4><div class="when">${ago(i.date)}</div></a>`).join("")}
+      </section>` : "";
+
     // ---- meal deals (structured offers: brand, exact offer, conditions, dates)
     const meals = S.meals || [];
     const fmtDay = (s) => new Date(s + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
@@ -83,7 +92,9 @@
     $("#meals").innerHTML = `
       <div class="sech"><h5>Meal Deals</h5><span>Updated daily 5 AM · on now or starting soon</span></div>
       ${meals.length ? `<section class="deals${meals.length > 8 ? " clip" : ""}" id="mealgrid">${meals.map(d => `
-        <a class="deal meal${d.image ? "" : " noimg"}${d.status === "now" ? " hot" : ""}" ${A(d.link)}>${pic(d)}
+        <a class="deal meal${d.status === "now" ? " hot" : ""}" ${A(d.link)}>
+          <div class="logo">${d.image ? `<img src="${safeUrl(d.image)}" alt="${esc(d.brand)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('b'),{textContent:${esc(JSON.stringify(d.brand))}}))">` : `<b>${esc(d.brand)}</b>`}
+            ${d.scope === "charleston" ? `<span class="chs">CHS</span>` : ""}</div>
           <div class="db">
             <div class="top"><span class="k">${esc(d.brand)}</span><span class="badge ${d.status}">${d.status === "now" ? "ON NOW" : "SOON"}</span></div>
             <div class="big">${esc(d.big)}</div>
@@ -136,18 +147,19 @@
 
   function renderSports() {
     const d = sportsData; if (!d) return;
-    const leagues = ["All", ...new Set(d.games.map(g => g.league))];
+    const hasLocal = d.games.some(g => g.local);
+    const leagues = ["All", ...(hasLocal ? ["Local"] : []), ...new Set(d.games.map(g => g.league))];
     if (!leagues.includes(sportsTab)) sportsTab = "All";
-    const games = d.games.filter(g => sportsTab === "All" || g.league === sportsTab);
+    const games = d.games.filter(g => sportsTab === "All" || (sportsTab === "Local" ? g.local : g.league === sportsTab));
     const live = d.games.filter(g => g.state === "in").length;
 
     const days = Object.keys(d.week).sort();
     $("#sports").innerHTML = `
       <div class="sech"><h5>Sports</h5><span>${d.games.length} games today${live ? ` · ${live} live` : ""}</span></div>
-      <div class="tabs">${leagues.map(l => `<button data-tab="${esc(l)}" class="${l === sportsTab ? "on" : ""}">${esc(l)}${l !== "All" ? ` <em>${d.games.filter(g => g.league === l).length}</em>` : ""}</button>`).join("")}</div>
+      <div class="tabs">${leagues.map(l => `<button data-tab="${esc(l)}" class="${l === sportsTab ? "on" : ""}">${esc(l)}${l !== "All" ? ` <em>${d.games.filter(g => l === "Local" ? g.local : g.league === l).length}</em>` : ""}</button>`).join("")}</div>
       ${games.length ? `<section class="games">${games.slice(0, 24).map(g => `
-        <a class="game ${g.state}" ${A(g.link)} style="--a:${esc(g.away.color || "#444")};--h:${esc(g.home.color || "#444")}">
-          <div class="gtop"><span class="lg">${esc(g.league)}</span>${status(g)}</div>
+        <a class="game ${g.state}${g.local ? " local" : ""}" ${A(g.link)} style="--a:${esc(g.away.color || "#444")};--h:${esc(g.home.color || "#444")}">
+          <div class="gtop"><span class="lg">${esc(g.league)}${g.local ? ' <i class="loc">LOCAL</i>' : ""}</span>${status(g)}</div>
           ${teamRow(g.away, g)}${teamRow(g.home, g)}
           <div class="gbot">${esc(g.note || g.tv.join(" · ") || g.venue)}</div>
         </a>`).join("")}</section>` : `<div class="empty mono">No games today.</div>`}
@@ -186,6 +198,16 @@
   }
   loadNews(); setInterval(loadNews, 15 * 60_000);
   loadSports();
+
+  // ---------- Charleston weather (National Weather Service) ----------
+  async function loadWeather() {
+    try {
+      const w = await (await fetch("/api/weather")).json();
+      if (w.temp == null) return;
+      $("#wx").innerHTML = `<b>${w.temp}°</b> ${esc(w.short)}${w.high != null ? ` · H ${w.high}° L ${w.low ?? "–"}°` : ""}${w.rain ? ` · ${w.rain}% rain` : ""}`;
+    } catch (_) {}
+  }
+  loadWeather(); setInterval(loadWeather, 20 * 60_000);
 
   // ---------- live crypto ticker (CoinGecko public API, no key) ----------
   const fmt = (n) => "$" + Math.round(n).toLocaleString("en-US");
